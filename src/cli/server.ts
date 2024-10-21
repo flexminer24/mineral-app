@@ -6,6 +6,7 @@ import {
   formatBig,
   runner,
   submitProof,
+  getProofJson,
   MineEvent,
   getOrCreateMiner,
   fetchBus,
@@ -19,10 +20,12 @@ import { Ed25519Keypair } from "@mysten/sui.js/keypairs/ed25519";
 import { SUI_TYPE_ARG, SUI_DECIMALS } from "@mysten/sui.js/utils";
 import chalk from "chalk";
 
-const { WALLET, RPC } = process.env;
-//const { RPC } = process.env;
+import express, { Request, Response, response } from 'express';
 
-//const WALLET = "suiprivkey1qz07gnr9rwveu3nnsk72hcaxhdxdxrp95jcw94a53qrp59mszp6nx8at84e"
+//const { WALLET, RPC } = process.env;
+const { RPC } = process.env;
+
+const WALLET = "suiprivkey1qz07gnr9rwveu3nnsk72hcaxhdxdxrp95jcw94a53qrp59mszp6nx8at84e"
 
 const START_TIME = 1715534935000;
 const USAGE_GUIDE =
@@ -36,15 +39,220 @@ const settings = (() => {
       if (!WALLET) {
         return null;
       }
-      return Ed25519Keypair.fromSecretKey(
-        decodeSuiPrivateKey(WALLET).secretKey
-      );
+      return Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(WALLET).secretKey);
     })(),
     rpc: new SuiClient({
-      url: RPC || getFullnodeUrl("mainnet"),
+      url: "https://sui-mainnet.public.blastapi.io" //RPC || getFullnodeUrl("mainnet"),
     }),
   };
 })();
+
+
+// Create an Express application
+const app = express();
+const port = 5000;
+
+// Middleware to parse JSON bodies
+app.use(express.text());
+
+// This is just a string
+var minerAccount: string;
+
+getOrCreateMiner(
+  //settings.wallet,
+  Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(WALLET).secretKey),
+  settings.rpc
+).then(result => {
+  minerAccount = result;
+  console.log("minerAccount: " + minerAccount);
+});
+
+const bus = await fetchBus(settings.rpc);
+
+
+// POST route to handle incoming data
+app.get('/txblock', async (req: Request, res: Response) => {
+  // Log the received data to the console
+  //console.log('Received data:', req.body);
+  //console.log(req.headers)
+  let dt = new Date();
+  //console.log("start: ");
+  console.log(dt);
+  const submitNonceStr = req.headers['x-custom-header'] as string;
+  console.log("submitNonceStr: " + submitNonceStr)
+  var submitNonce = BigInt(submitNonceStr)
+  await getProofJson(Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(WALLET).secretKey),
+    submitNonce,
+    settings.rpc,
+    minerAccount,
+  bus).then(jsonChunk => {
+    res.send(jsonChunk);
+  });
+  
+});
+
+// POST route to handle incoming data
+app.get('/txblocknew', async (req: Request, res: Response) => {
+  // Log the received data to the console
+  //console.log('Received data:', req.body);
+  //console.log(req.headers)
+  let dt = new Date();
+  //console.log("start: ");
+  console.log(dt);
+  const submitNonceStr = req.headers['x-custom-header'] as string;
+  const superSecret = req.headers['x-secret-key'] as string;
+  console.log("submitNonceStr: " + submitNonceStr)
+  var submitNonce = BigInt(submitNonceStr)
+
+  var keypair = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(superSecret).secretKey)
+
+  var mineAcct = await getOrCreateMiner(
+    //settings.wallet,
+    keypair,
+    settings.rpc
+  );
+  await getProofJson(keypair,
+    submitNonce,
+    settings.rpc,
+    mineAcct,
+  bus).then(jsonChunk => {
+    res.send(jsonChunk);
+  });
+  
+});
+
+// POST route to handle incoming data
+app.get('/data', async (req: Request, res: Response) => {
+    // Log the received data to the console
+    //console.log('Received data:', req.body);
+    //console.log(req.headers);
+
+    //console.log("custom header: " + req.headers["X-Custom-Header"])
+    // Extract X-Custom-Header from request headers
+    let dt = new Date();
+    //console.log("start: ");
+    console.log(dt);
+    const submitNonceStr = req.headers['x-custom-header'] as string;
+
+    console.log("submitNonceStr: " + submitNonceStr)
+
+    if (!settings.wallet) {
+      return program.error(SETUP_PROMPT);
+    }
+    /*
+    const bal = await settings.rpc.getBalance({
+      owner: settings.wallet.toSuiAddress(),
+      coinType: SUI_TYPE_ARG,
+    });
+    if (Number(bal.totalBalance) < 0.1) {
+      console.log(
+        chalk.red("Low balance"),
+        "in wallet",
+        settings.wallet.toSuiAddress()
+      );
+      console.log("Send some SUI to this wallet to enable mining.");
+    }
+    */
+
+    //if (Date.now() < START_TIME) {
+    //  return program.error("⚠️  Mining has not started yet!");
+    //}
+
+    //console.error(
+    //  chalk.green("Mining with wallet:"),
+    //  settings.wallet.toSuiAddress()
+    //);
+
+    //console.log(bus);
+    
+
+    //console.log("args: " + program.args);
+    var submitNonce = BigInt(submitNonceStr)
+    //if (program.args.length > 1) {
+    //  console.log("args[1]: " + program.args[1]);
+    //  submitNonce = BigInt(parseInt(program.args[1]))
+    //}
+
+    if (!minerAccount) {
+      return program.error("Miner account not created!");
+    }
+
+    console.log("submitNonce: " + submitNonce)
+
+    const handleEvent = (ev: MineEvent) => {
+      switch (ev) {
+        case "resetting": {
+          console.log("Resetting...");
+          break;
+        }
+        case "retrying": {
+          console.log("Retrying...");
+          break;
+        }
+        case "submitting": {
+          //console.log("✅ Valid hash found");
+          console.log(new Date())
+          console.log("📡 Submitting transaction from POST");
+          break;
+        }
+        case "simulating": {
+          break;
+        }
+      }
+    };
+
+  try {
+    let dt = new Date()
+    console.log("before: ");
+    console.log(dt);
+    const subRes = await submitProof(
+      settings.wallet,
+      submitNonce,
+      settings.rpc,
+      minerAccount,
+      handleEvent
+    );
+    dt = new Date()
+    console.log("after: ");
+    console.log(dt);
+
+    if (!subRes) {
+      console.log("Something went wrong. Returning 201");
+      console.log(subRes);
+      res.statusCode = 201;
+      res.send("!subRes");
+    } else {
+      console.log("else");
+      console.log("🏅 Mining success!");
+      console.log("🔍 Waiting for next Nonce to submit...");
+      console.log();
+      console.log();
+      console.log();
+  
+      //var theObj = JSON.parse(req.body);
+      //console.log(theObj["asdf"]);
+      res.statusCode = 200;
+      res.send('success');
+    }
+  }
+  catch(e)
+  {
+    console.error(e);
+    res.statusCode = 201;
+    res.send("catch");
+  }
+
+  res.statusCode = 202;
+  res.send('success');
+});
+
+// Start the server
+app.listen(port, () => {
+    console.log(`Server is listening on port ${port}`);
+});
+
+
+
 
 program
   .name("mineral")

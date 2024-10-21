@@ -18,6 +18,7 @@ import { Bus } from "./codegen/mineral/mine/structs";
 import { Miner } from "./codegen/mineral/miner/structs";
 import numbro from "numbro";
 import { SignatureWithBytes } from "@mysten/sui.js/dist/cjs/cryptography";
+import { pure } from "./codegen/_framework/util";
 
 export const CONFIG =
   "0x0fc44c38dd791dffb696ca7448cb8b1774c17178d3dd3b0fed3480f2ac82bd5b";
@@ -133,6 +134,8 @@ export function buildTx(
 ): Promise<SignatureWithBytes> {
   txb.setSender(wallet.toSuiAddress());
   txb.setGasBudget(5000000);
+  //console.log("txb");
+  //console.log(txb);
   return txb.sign({
     client,
     signer: wallet,
@@ -167,6 +170,8 @@ export async function buildMineTx(
     clock: SUI_CLOCK_OBJECT_ID,
     miner: minerId,
   });
+  //console.log(txb.create(value: txb));
+  //pure(txb, [createdObj][0])
   txb.transferObjects([createdObj], payer);
   return txb;
 }
@@ -186,7 +191,26 @@ export function createHash(
   const dataToHash = new Uint8Array(32 + 32 + 8);
   dataToHash.set(currentHash, 0);
   dataToHash.set(signerAddressBytes, 32);
+  //console.log("nonce: " + nonce);
+  //console.log("int64to8: " + int64to8(nonce));
   dataToHash.set(int64to8(nonce), 64);
+  
+  var str1 = "dataToHash = 0x"; 
+  for(var x = 0; x < 72; ++x) {
+    str1 += dataToHash[x].toString(16).padStart(2, '0');
+  }
+  //console.log(str1);
+  var result = keccak_256(dataToHash);
+  //console.log(result);
+  
+  var str2 = "result = 0x"; 
+  for(var x = 0; x < 32; x++) {
+    str2 += result[x].toString(16).padStart(2, '0');
+  }
+  //console.log(str2);
+  return result;
+  
+  
   return keccak_256(dataToHash);
 }
 
@@ -216,26 +240,45 @@ export async function runner(
   difficulty: number,
   wallet: Ed25519Keypair,
   minerId: string,
+  startNonce: number,
   logger?: (_val: string) => void
 ) {
   const log = (val: string) => (logger ? logger(val) : null);
   const tag = wallet.toSuiAddress().slice(0, 8);
 
+  console.log("suiAddress: " + wallet.toSuiAddress())
   const signerBytes = bcs.Address.serialize(wallet.toSuiAddress()).toBytes();
+  console.log("signerBytes: " + signerBytes.length);
+  var sigBy = "signerBytes = "; 
+  for(var x = 0; x < 32; x++) {
+    sigBy += signerBytes[x];
+  }
+  console.log(sigBy)
 
   let currentHash: Uint8Array | null = null;
-  let nonce = BigInt(0);
+  let nonce = BigInt(startNonce);
+  let printer = BigInt(1000000);
   log("⛏️  Mining started");
   log("🔍 Looking for a valid proof...");
   while (true) {
     await (async () => {
       if (!currentHash) {
         const miner = await Miner.fetch(client, minerId);
+        console.log(miner);
         currentHash = new Uint8Array(miner.currentHash);
+        var str1 = "currentHash = 80"; 
+        for(var x = 0; x < 32; x++) {
+          str1 += currentHash[x].toString(16);
+        }
+        console.log(str1)
+        console.log("startNonce: " + nonce)
       }
 
-      const hash = createHash(currentHash, signerBytes, nonce);
-      const hashIsValid = validateHash(hash, difficulty);
+      var hash_result = createHash(currentHash, signerBytes, nonce);
+      if(nonce % printer == 0) {
+        console.log(nonce);
+      }
+      const hashIsValid = validateHash(hash_result, difficulty);
       if (hashIsValid) {
         const handleEvent = (ev: MineEvent) => {
           switch (ev) {
@@ -255,6 +298,28 @@ export async function runner(
             }
           }
         };
+        const dataToHash = new Uint8Array(32 + 32 + 8);
+        dataToHash.set(currentHash, 0);
+        dataToHash.set(signerBytes, 32);
+        //console.log("nonce: " + nonce);
+        //console.log("int64to8: " + int64to8(nonce));
+        dataToHash.set(int64to8(nonce), 64);
+        var str1 = "dataToHash = 0x"; 
+        for(var x = 0; x < 72; ++x) {
+          str1 += dataToHash[x].toString(16).padStart(2, '0');
+        }
+        console.log(str1);
+
+        var str2 = "result = 0x"; 
+        for(var x = 0; x < 32; x++) {
+          str2 += hash_result[x].toString(16).padStart(2, '0');
+        }
+        console.log(str2);
+
+        //console.log("Nonce: " + nonce);
+        //console.log("minerID: " + minerId);
+        //console.log("wallet: " + wallet);
+        //process.exit(1)
         const res = await submitProof(
           wallet,
           nonce,
@@ -270,7 +335,7 @@ export async function runner(
         log("🏅 Mining success!");
         log("🔍 Looking for next hash...");
         currentHash = null;
-        nonce = BigInt(0);
+        nonce = BigInt(startNonce);
       } else {
         nonce++;
       }
@@ -443,7 +508,7 @@ export async function submitProof(
       return null;
     }
   }
-
+  //console.log("nonce: " + nonce);
   const txb = await buildMineTx(
     nonce,
     miner,
@@ -451,8 +516,12 @@ export async function submitProof(
     bus,
     wallet.toSuiAddress()
   );
+  //console.log("txb: ");
+  //console.log(txb);
 
   const signedTx = await buildTx(txb, client, wallet);
+  //console.log("signedTx: ");
+  //console.log(signedTx);
 
   log("simulating");
   const dryRun = await client.dryRunTransactionBlock({
@@ -470,6 +539,8 @@ export async function submitProof(
         await execReset(client, wallet);
         return true;
       } else if (errMsg.includes(constants.ERewardsExhausted.toString())) {
+        return true;
+      } else if (errMsg.includes(constants.EInsufficientDifficulty.toString())) {
         return true;
       } else if (contractErr) {
         throw Error(contractErr);
@@ -491,6 +562,78 @@ export async function submitProof(
 
   return res;
 }
+
+export async function getProofJson(
+  wallet: Ed25519Keypair,
+  nonce: bigint,
+  client: SuiClient,
+  miner: string,
+  bus: Bus,
+  logger?: (_val: MineEvent) => void
+): Promise<string> {
+  const log = (val: MineEvent) => (logger ? logger(val) : null);
+  //const { bus, status } = await findBus(client);
+
+  //console.log("nonce: " + nonce);
+  //console.log("miner: " + miner);
+  //console.log("client: " + client);
+  //console.log("bus: " + bus);
+  //console.log("wallet: " + wallet.toSuiAddress());
+  const txb = await buildMineTx(
+    nonce,
+    miner,
+    client,
+    bus,
+    wallet.toSuiAddress()
+  );
+  //console.log("txb: ");
+  //console.log(txb.blockData);
+
+  const signedTx = await buildTx(txb, client, wallet);
+  //console.log("signedTx: ");
+  //console.log(signedTx);
+  return JSON.stringify(signedTx)
+
+  log("simulating");
+  const dryRun = await client.dryRunTransactionBlock({
+    transactionBlock: signedTx.bytes,
+  });
+
+  // TODO refactor
+  const shouldRetry = await (async () => {
+    if (dryRun.effects.status.status === "failure") {
+      const contractErr = extractError(dryRun.effects.status);
+      const errMsg = dryRun.effects.status.error || "missing";
+
+      if (errMsg.includes(constants.ENeedsReset.toString())) {
+        log("resetting");
+        await execReset(client, wallet);
+        return true;
+      } else if (errMsg.includes(constants.ERewardsExhausted.toString())) {
+        return true;
+      } else if (errMsg.includes(constants.EInsufficientDifficulty.toString())) {
+        return true;
+      } else if (contractErr) {
+        throw Error(contractErr);
+      } else {
+        throw Error("Unknown error");
+      }
+    } else {
+      return false;
+    }
+  })();
+
+  if (shouldRetry) {
+    log("retrying");
+    return null;
+  }
+
+  log("submitting");
+  const res = await ship(signedTx, client);
+
+  return res;
+}
+
 
 export interface MineConfig {
   currentHash: Uint8Array;
